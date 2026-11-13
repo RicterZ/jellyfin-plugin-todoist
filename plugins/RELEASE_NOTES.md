@@ -1,16 +1,14 @@
-Jellyfin 10.11.x 原生 Todoist 插件首次发布。
+修复 1.0.0.0 超出需求的全库补齐行为。
 
-- 可通过 Jellyfin 插件仓库安装，无需 webhook 或 Python 服务。
-- 原生后台：OAuth 应用配置、项目关联、同步状态和用户关联列表。
-- 每个 Jellyfin 用户独立授权 Todoist，按剧集建任务，观看后自动完成。
-- 持久化去重、失败重试、令牌刷新，以及空分区归档和恢复。
+- 只为关联后新入库的剧集创建任务；首次关联、重启、换项目和手动重试均不补建历史任务。
+- 播放完成或手动标记已观看时，关闭已有对应任务，不为历史观看事件创建新任务。
+- 新入库事件失败后持久化重试；保留原有授权和任务映射。
+- 后台将“立即同步”改为“重试待处理事件”，并明确不导入历史剧集。
 
-插件仓库地址：
+请在 Jellyfin 控制台更新 Todoist 到 1.0.1.0 并重启。仓库订阅地址保持不变：
 
 ```text
 https://github.com/RicterZ/jellyfin-plugin-todoist/releases/latest/download/manifest.json
 ```
 
-Jellyfin 控制台 → 插件 → 仓库 → 添加上述地址；在目录中安装 Todoist 并重启。
-
-迁移前停用旧 webhook 服务。旧 Python SQLite 映射不自动迁移，建议选择新的 Todoist 项目。
+升级不会批量删除旧版已经创建的 Todoist 任务；这些任务可手动清理，或保留映射通过观看事件关闭。
