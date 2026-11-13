@@ -1,0 +1,31 @@
+name: Publish Jellyfin plugin
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '9.0.x'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Verify plugin
+        run: dotnet run --project plugins/Jellyfin.Plugin.Todoist.Tests -c Release
+      - name: Package repository
+        run: |
+          python plugins/build_release.py --skip-build
+          python plugins/test_release.py
+      - name: Publish version and repository manifest
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VERSION=$(python -c 'import json; print(json.load(open("plugins/Jellyfin.Plugin.Todoist/meta.json"))["version"])')
+          gh release create "v${VERSION}" --target "$GITHUB_SHA" --title "Todoist ${VERSION}" --notes-file plugins/RELEASE_NOTES.md "plugins/dist/Jellyfin.Plugin.Todoist_${VERSION}.zip" plugins/dist/manifest.json

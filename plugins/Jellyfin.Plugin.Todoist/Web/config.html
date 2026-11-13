@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html><head><title>Todoist</title></head><body>
+<div id="todoistConfigPage" data-role="page" class="page type-interior pluginConfigurationPage" data-require="emby-input,emby-button,emby-select">
+<div data-role="content"><div class="content-primary">
+    <div class="verticalSection">
+        <h2 class="sectionTitle">Todoist</h2>
+        <p>将 Jellyfin 剧集同步到每个用户的 Todoist 项目。新增剧集创建任务，观看完成后自动完成任务。</p>
+        <p id="todoistMessage" role="status" aria-live="polite"></p>
+    </div>
+    <div class="verticalSection">
+        <h2 class="sectionTitle">OAuth 应用配置</h2>
+        <p>在 Todoist 开发者控制台创建应用，回调地址填写 Jellyfin 公网地址加 <code>/Todoist/Callback</code>（包含 Jellyfin Base URL）。</p>
+        <form id="todoistConfigForm">
+            <div class="inputContainer"><label class="inputLabel" for="todoistClientId">Client ID</label><input is="emby-input" id="todoistClientId" required></div>
+            <div class="inputContainer"><label class="inputLabel" for="todoistClientSecret">Client secret</label><input is="emby-input" id="todoistClientSecret" type="password" required autocomplete="off"><div class="fieldDescription">仅服务器使用，不会发送给其他用户。</div></div>
+            <div class="inputContainer"><label class="inputLabel" for="todoistRedirectUri">回调地址（HTTPS）</label><input is="emby-input" id="todoistRedirectUri" type="url" required></div>
+            <button is="emby-button" type="submit" class="raised button-submit block"><span>保存应用配置</span></button>
+        </form>
+    </div>
+    <div class="verticalSection">
+        <h2 class="sectionTitle">我的 Todoist</h2>
+        <p id="todoistStatus" class="fieldDescription"></p>
+        <button is="emby-button" type="button" id="todoistAuthorize" class="raised"><span>授权 Todoist</span></button>
+        <form id="todoistProjectForm" hidden>
+            <div class="selectContainer"><label class="selectLabel" for="todoistProject">Todoist 项目 / 看板</label><select is="emby-select" id="todoistProject" required></select><div class="fieldDescription">首次保存会同步所有可访问的未观看剧集，建议使用独立项目。切换项目会保留原项目任务。</div></div>
+            <button is="emby-button" type="submit" class="raised button-submit block"><span>保存项目关联</span></button>
+            <button is="emby-button" type="button" id="todoistSync" class="raised"><span>立即同步</span></button>
+            <button is="emby-button" type="button" id="todoistDisconnect" class="raised"><span>解除我的关联</span></button>
+            <p class="fieldDescription">解除关联会清除本地授权和映射，保留 Todoist 任务。需彻底撤销授权时，在 Todoist 集成设置中移除本应用。</p>
+        </form>
+    </div>
+    <div class="verticalSection">
+        <h2 class="sectionTitle">用户关联与同步状态</h2>
+        <p class="fieldDescription">只展示关联状态，不展示用户令牌。普通用户可通过下方入口登录并关联自己的账户。</p>
+        <div id="todoistConnections" class="paperList"></div>
+        <button is="emby-button" type="button" id="todoistRefresh" class="raised"><span>刷新状态</span></button>
+        <p><a id="todoistAccountLink" class="button-link" target="_blank" rel="noopener">打开用户授权页面</a></p>
+    </div>
+</div></div>
+<script>
+(() => {
+    const pluginId = '6c5e78d3-d5ac-433b-b2ec-05bb05096dba';
+    const page = document.querySelector('#todoistConfigPage');
+    const $ = id => page.querySelector('#' + id);
+    const normalize = value => Array.isArray(value) ? value.map(normalize) : value && typeof value === 'object'
+        ? Object.fromEntries(Object.entries(value).map(([key, item]) => [key[0].toLowerCase() + key.slice(1), normalize(item)])) : value;
+    async function api(path, method = 'GET', body) {
+        const response = await fetch(ApiClient.getUrl('Todoist/' + path), {
+            method, headers: {'X-Emby-Token': ApiClient.accessToken(), 'Content-Type':'application/json'},
+            body: body === undefined ? undefined : JSON.stringify(body), cache: 'no-store'
+        });
+        const data = normalize(await response.json().catch(() => ({})));
+        if (!response.ok) throw new Error(data.error || '请求失败（HTTP ' + response.status + '）');
+        return data;
+    }
+    const summary = row => '项目：' + (row.projectId || '未选择') + ' · 已关联剧集：' + row.trackedTasks
+        + ' · 最近同步：' + (row.lastSync ? new Date(row.lastSync).toLocaleString() : '尚未同步')
+        + (row.lastError ? ' · 错误：' + row.lastError : '');
+    async function refresh() {
+        const [status, connections] = await Promise.all([api('Status'), api('Connections')]);
+        $('todoistStatus').textContent = (status.connected ? '已授权 Todoist。' : '尚未授权 Todoist。') + summary(status);
+        $('todoistProjectForm').hidden = !status.connected;
+        if (status.connected) {
+            const projects = await api('Projects');
+            $('todoistProject').replaceChildren(new Option('请选择项目', ''));
+            projects.forEach(project => $('todoistProject').add(new Option(project.name, project.id)));
+            $('todoistProject').value = status.projectId;
+        }
+        const list = $('todoistConnections'); list.replaceChildren();
+        if (!connections.length) {
+            const empty = document.createElement('p'); empty.className = 'fieldDescription'; empty.textContent = '还没有用户关联 Todoist。'; list.append(empty);
+        }
+        connections.forEach(connection => {
+            const row = document.createElement('div'); row.className = 'listItem';
+            const body = document.createElement('div'); body.className = 'listItemBody';
+            const title = document.createElement('div'); title.className = 'listItemBodyText'; title.textContent = connection.userName;
+            const detail = document.createElement('div'); detail.className = 'listItemBodyText secondary'; detail.textContent = summary(connection);
+            body.append(title, detail); row.append(body); list.append(row);
+        });
+    }
+    async function run(action) {
+        Dashboard.showLoadingMsg();
+        const buttons = [...page.querySelectorAll('button')]; buttons.forEach(button => button.disabled = true);
+        $('todoistMessage').textContent = '';
+        try { await action(); }
+        catch (error) { $('todoistMessage').textContent = error.message; Dashboard.alert(error.message); }
+        finally { buttons.forEach(button => button.disabled = false); Dashboard.hideLoadingMsg(); }
+    }
+    page.addEventListener('pageshow', () => run(async () => {
+        const config = await ApiClient.getPluginConfiguration(pluginId);
+        $('todoistClientId').value = config.ClientId; $('todoistClientSecret').value = config.ClientSecret; $('todoistRedirectUri').value = config.RedirectUri;
+        $('todoistAccountLink').href = ApiClient.getUrl('Todoist/Account'); await refresh();
+    }));
+    $('todoistConfigForm').addEventListener('submit', event => {
+        event.preventDefault(); run(async () => {
+            const config = await ApiClient.getPluginConfiguration(pluginId);
+            config.ClientId = $('todoistClientId').value.trim(); config.ClientSecret = $('todoistClientSecret').value.trim(); config.RedirectUri = $('todoistRedirectUri').value.trim();
+            const uri = new URL(config.RedirectUri);
+            if (uri.protocol !== 'https:' && !(uri.protocol === 'http:' && ['localhost','127.0.0.1','[::1]'].includes(uri.hostname))) throw new Error('回调地址需要使用 HTTPS；仅 localhost 支持 HTTP 调试。');
+            Dashboard.processPluginConfigurationUpdateResult(await ApiClient.updatePluginConfiguration(pluginId, config)); $('todoistMessage').textContent = '应用配置已保存。';
+        });
+    });
+    $('todoistAuthorize').addEventListener('click', () => run(async () => { location.assign((await api('Authorize?dashboard=true', 'POST')).url); }));
+    $('todoistProjectForm').addEventListener('submit', event => {
+        event.preventDefault(); run(async () => { await api('Project', 'POST', {ProjectId:$('todoistProject').value}); await refresh(); $('todoistMessage').textContent = '项目已关联，同步已加入队列。'; });
+    });
+    $('todoistSync').addEventListener('click', () => run(async () => { await api('Sync', 'POST'); $('todoistMessage').textContent = '同步已加入队列，请稍后刷新状态。'; }));
+    $('todoistDisconnect').addEventListener('click', () => run(async () => { await api('Authorization', 'DELETE'); await refresh(); $('todoistMessage').textContent = '已解除我的关联。'; }));
+    $('todoistRefresh').addEventListener('click', () => run(refresh));
+})();
+</script></div></body></html>

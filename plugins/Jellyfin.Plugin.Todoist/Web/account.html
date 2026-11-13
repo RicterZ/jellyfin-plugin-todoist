@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html lang="en" class="layout-desktop"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Jellyfin · Todoist</title>
+</head><body><div class="page type-interior"><main class="content-primary padded-left padded-right" style="max-width:40em;margin:3em auto">
+<h1>Jellyfin · Todoist</h1>
+<p>Connect your Todoist account, then select the project for your unwatched episodes.</p>
+<p id="message" role="status" aria-live="polite"></p>
+<form id="login">
+    <h2>Sign in to Jellyfin</h2>
+    <label class="inputLabel" for="username">Username</label><input class="emby-input" id="username" autocomplete="username" required>
+    <label class="inputLabel" for="password">Password</label><input class="emby-input" id="password" type="password" autocomplete="current-password">
+    <button class="emby-button raised" type="submit">Sign in</button>
+</form>
+<section id="settings" hidden>
+    <p id="status"></p>
+    <button class="emby-button raised" id="authorize">Authorize Todoist</button>
+    <form id="projectForm" hidden>
+        <label class="inputLabel" for="project">Todoist project / board</label><select class="emby-select" id="project" required></select>
+        <p>Saving starts synchronization of all accessible unwatched episodes. Changing projects leaves existing Todoist tasks in the previous project.</p>
+        <button class="emby-button raised" type="submit">Save project</button><button class="emby-button raised" id="sync" type="button">Sync now</button>
+    </form>
+    <button class="emby-button raised" id="refresh">Refresh status</button><button class="emby-button raised" id="disconnect">Disconnect Todoist</button><button class="emby-button raised" id="logout">Sign out</button>
+    <p>Disconnecting stops synchronization and removes local credentials. Existing Todoist tasks remain. Revoke the app in Todoist settings to remove its authorization.</p>
+</section>
+<script>
+(() => {
+    const base = location.pathname.replace(/\/Todoist\/Account\/?$/i, '');
+    // Reuse the installed Jellyfin client's CSS instead of maintaining a second theme.
+    fetch(base + '/web/index.html').then(response => response.text()).then(html => {
+        const documentHtml = new DOMParser().parseFromString(html, 'text/html');
+        const styles = [...documentHtml.querySelectorAll('link[rel="stylesheet"]')].map(link => new URL(link.getAttribute('href'), location.origin + base + '/web/').href);
+        styles.push(base + '/web/themes/dark/theme.css');
+        styles.forEach(href => { const link = document.createElement('link'); link.rel = 'stylesheet'; link.href = href; document.head.append(link); });
+    }).catch(() => {});
+    const key = 'jellyfin-todoist:' + base;
+    const $ = id => document.getElementById(id);
+    let token = sessionStorage.getItem(key) || '';
+    const normalize = value => Array.isArray(value) ? value.map(normalize) : value && typeof value === 'object'
+        ? Object.fromEntries(Object.entries(value).map(([k,v]) => [k[0].toLowerCase() + k.slice(1), normalize(v)])) : value;
+    async function api(path, method = 'GET', body) {
+        const response = await fetch(base + '/' + path, {
+            method, headers: {'Content-Type':'application/json', 'Accept':'application/json',
+                'Authorization': 'MediaBrowser Client="Todoist", Device="Browser", DeviceId="todoist-account", Version="1.0.0"' + (token ? ', Token="' + token + '"' : '')},
+            body: body === undefined ? undefined : JSON.stringify(body), cache:'no-store'
+        });
+        const data = normalize(await response.json().catch(() => ({})));
+        if (!response.ok) {
+            if (response.status === 401) { token = ''; sessionStorage.removeItem(key); $('login').hidden = false; $('settings').hidden = true; }
+            throw new Error(data.error || (response.status === 401 ? 'Sign in to Jellyfin again.' : 'Request failed (' + response.status + ').'));
+        }
+        return data;
+    }
+    async function load() {
+        if (!token) return;
+        const state = await api('Todoist/Status');
+        $('login').hidden = true; $('settings').hidden = false;
+        $('status').textContent = (state.connected ? 'Todoist connected.' : 'Todoist is not connected.')
+            + ' Tracked episodes: ' + state.trackedTasks + (state.lastSync ? '\nLast sync: ' + new Date(state.lastSync).toLocaleString() : '')
+            + (state.lastError ? '\n' + state.lastError : '');
+        $('disconnect').hidden = !state.connected; $('projectForm').hidden = !state.connected;
+        if (state.connected) {
+            const projects = await api('Todoist/Projects');
+            $('project').replaceChildren(new Option('Select a project', ''));
+            projects.forEach(p => $('project').add(new Option(p.name, p.id)));
+            $('project').value = state.projectId;
+        }
+    }
+    function action(id, eventName, fn) {
+        $(id).addEventListener(eventName, async event => {
+            event.preventDefault(); $('message').textContent = '';
+            const buttons = [...document.querySelectorAll('button')]; buttons.forEach(b => b.disabled = true);
+            try { await fn(); } catch (error) { $('message').textContent = error.message; }
+            finally { buttons.forEach(b => b.disabled = false); }
+        });
+    }
+    action('login', 'submit', async () => {
+        token = '';
+        const data = await api('Users/AuthenticateByName', 'POST', {Username:$('username').value, Pw:$('password').value});
+        $('password').value = ''; token = data.accessToken; sessionStorage.setItem(key, token); await load();
+    });
+    action('authorize', 'click', async () => { location.assign((await api('Todoist/Authorize', 'POST')).url); });
+    action('projectForm', 'submit', async () => {
+        await api('Todoist/Project', 'POST', {ProjectId:$('project').value}); await load(); $('message').textContent = 'Project saved. Synchronization queued.';
+    });
+    action('sync', 'click', async () => { await api('Todoist/Sync', 'POST'); $('message').textContent = 'Synchronization queued. Refresh status shortly.'; });
+    action('refresh', 'click', load);
+    action('disconnect', 'click', async () => { await api('Todoist/Authorization', 'DELETE'); await load(); });
+    action('logout', 'click', async () => {
+        await api('Sessions/Logout', 'POST'); token = ''; sessionStorage.removeItem(key); $('login').hidden = false; $('settings').hidden = true;
+    });
+    const result = new URLSearchParams(location.search).get('authorization');
+    if (result) {
+        $('message').textContent = result === 'success' ? 'Todoist authorized. Select a project to start synchronization.' : 'Todoist authorization was canceled.';
+        history.replaceState(null, '', location.pathname);
+    }
+    load().catch(error => { $('message').textContent = error.message; });
+})();
+</script></main></div></body></html>

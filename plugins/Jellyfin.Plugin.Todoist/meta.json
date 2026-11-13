@@ -1,0 +1,11 @@
+{
+  "category": "General",
+  "guid": "6c5e78d3-d5ac-433b-b2ec-05bb05096dba",
+  "name": "Todoist",
+  "description": "Synchronize Jellyfin episodes with each user's Todoist project.",
+  "owner": "RicterZ",
+  "version": "1.0.0.0",
+  "targetAbi": "10.11.0.0",
+  "status": "Active",
+  "autoUpdate": false
+}
