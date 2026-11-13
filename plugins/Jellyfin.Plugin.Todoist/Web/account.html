@@ -3,7 +3,7 @@
 <title>Jellyfin · Todoist</title>
 </head><body><div class="page type-interior"><main class="content-primary padded-left padded-right" style="max-width:40em;margin:3em auto">
 <h1>Jellyfin · Todoist</h1>
-<p>Connect your Todoist account, then select the project for your unwatched episodes.</p>
+<p>Connect your Todoist account, then select the project for newly added episodes.</p>
 <p id="message" role="status" aria-live="polite"></p>
 <form id="login">
     <h2>Sign in to Jellyfin</h2>
@@ -16,8 +16,8 @@
     <button class="emby-button raised" id="authorize">Authorize Todoist</button>
     <form id="projectForm" hidden>
         <label class="inputLabel" for="project">Todoist project / board</label><select class="emby-select" id="project" required></select>
-        <p>Saving starts synchronization of all accessible unwatched episodes. Changing projects leaves existing Todoist tasks in the previous project.</p>
-        <button class="emby-button raised" type="submit">Save project</button><button class="emby-button raised" id="sync" type="button">Sync now</button>
+        <p>Only episodes added after linking will create tasks; existing library items are never backfilled. Changing projects leaves existing Todoist tasks in the previous project.</p>
+        <button class="emby-button raised" type="submit">Save project</button><button class="emby-button raised" id="sync" type="button">Retry pending events</button>
     </form>
     <button class="emby-button raised" id="refresh">Refresh status</button><button class="emby-button raised" id="disconnect">Disconnect Todoist</button><button class="emby-button raised" id="logout">Sign out</button>
     <p>Disconnecting stops synchronization and removes local credentials. Existing Todoist tasks remain. Revoke the app in Todoist settings to remove its authorization.</p>
@@ -80,9 +80,9 @@
     });
     action('authorize', 'click', async () => { location.assign((await api('Todoist/Authorize', 'POST')).url); });
     action('projectForm', 'submit', async () => {
-        await api('Todoist/Project', 'POST', {ProjectId:$('project').value}); await load(); $('message').textContent = 'Project saved. Synchronization queued.';
+        await api('Todoist/Project', 'POST', {ProjectId:$('project').value}); await load(); $('message').textContent = 'Project saved. Only newly added episodes will create tasks.';
     });
-    action('sync', 'click', async () => { await api('Todoist/Sync', 'POST'); $('message').textContent = 'Synchronization queued. Refresh status shortly.'; });
+    action('sync', 'click', async () => { await api('Todoist/Sync', 'POST'); $('message').textContent = 'Pending events queued for retry. Existing library items will not be imported.'; });
     action('refresh', 'click', load);
     action('disconnect', 'click', async () => { await api('Todoist/Authorization', 'DELETE'); await load(); });
     action('logout', 'click', async () => {
