@@ -31,12 +31,12 @@ dotnet build plugins/Jellyfin.Plugin.Todoist -c Release
 dotnet run --project plugins/Jellyfin.Plugin.Todoist.Tests -c Release
 ```
 
-停止 Jellyfin，在 **Jellyfin 的插件目录**下创建 `Todoist_1.0.1.0/`，把以下两个文件放入其中：
+停止 Jellyfin，在 **Jellyfin 的插件目录**下创建 `Todoist_1.0.2.0/`，把以下两个文件放入其中：
 
 - `plugins/Jellyfin.Plugin.Todoist/bin/Release/net9.0/Jellyfin.Plugin.Todoist.dll`
 - `plugins/Jellyfin.Plugin.Todoist/meta.json`
 
-例如官方 Docker 部署中的目标目录为 `/config/plugins/Todoist_1.0.1.0/`。原生安装使用 Jellyfin 实际的插件路径，不是本仓库的 `plugins/` 目录。只安装此插件 DLL 和清单，Jellyfin 的程序集由服务器提供。重新启动 Jellyfin，在控制台 → 插件中检查 Todoist 是否加载。
+例如官方 Docker 部署中的目标目录为 `/config/plugins/Todoist_1.0.2.0/`。原生安装使用 Jellyfin 实际的插件路径，不是本仓库的 `plugins/` 目录。只安装此插件 DLL 和清单，Jellyfin 的程序集由服务器提供。重新启动 Jellyfin，在控制台 → 插件中检查 Todoist 是否加载。
 
 ## 管理员配置 OAuth
 
@@ -65,7 +65,7 @@ OAuth 请求 `data:read_write` 权限，用于读取项目、创建任务和分�
 
 ## 同步行为
 
-- 剧集按剧名分区；任务标题如 `Series S01E05`，保留特别篇的 `S00`。
+- 剧集按剧名分区；任务标题如 `银魂 S01E01`，保留特别篇的 `S00`。从所属剧集、季读取剧名和季号；新入库时元数据未齐全则保留事件，在后续重试中创建完整标题，不用单集名代替剧名。
 - 仅 `ItemAdded` 事件将具体剧集加入待创建队列；队列保存到状态文件。启动、项目关联、每两分钟重试和手动重试不会枚举全库或补建历史任务。
 - Jellyfin 报告播放完成，或停止位置与总时长相差不超过 60 秒时，完成对应任务。手动标记“已观看”同样生效。
 - 任务映射持久化，重启、同账户重新授权及切换回之前的项目会保留去重记录。写请求使用稳定的 `X-Request-Id`；失败请求在下一轮核对重试。
@@ -109,3 +109,7 @@ python3 plugins/test_release.py
 1.0.0.0 错误地增加了全库补齐行为。请通过 Jellyfin 插件更新功能升级到 **1.0.1.0** 并重启。新版保留授权和现有映射，不再补建历史剧集；已关联的任务仍可随播放完成或手动标记已观看而关闭。
 
 升级不会批量删除 Todoist 中已经创建的任务。旧版误建的历史任务需要在 Todoist 中清理；保留映射也可继续由观看事件关闭对应任务。
+
+## 1.0.2.0 标题修复
+
+新任务使用 `剧名 S01E01` 格式。优先读取所属剧集名称，剧集上的 `SeriesName` 作为备用；季号缺失时读取所属季。剧名、季号或集号仍缺失时延后创建，在下一轮事件重试中处理。保持仅新入库创建的行为，不补建历史任务，也不批量修改已存在的 Todoist 任务。
