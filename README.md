@@ -2,7 +2,7 @@
 
 Jellyfin 10.11.x 原生插件，使用 .NET 9。直接监听媒体库、播放停止和已观看状态事件，无需 Webhook 插件、Python 服务或外部数据库。
 
-首次关联项目会为该 Jellyfin 用户可访问的**所有未观看剧集**创建任务，截止日期为今天。建议使用独立的 Todoist 项目。已有 Python SQLite 映射不会自动导入；迁移前停用旧 webhook 和 Python 服务，并使用新项目，避免与旧任务重复。
+**只为关联项目之后收到的新入库剧集事件创建任务**，截止日期为今天。首次关联、重启、切换项目和重试都不会补建历史剧集任务。播放完成和手动标记已观看会关闭已有对应任务。已有 Python SQLite 映射不会自动导入；迁移前停用旧 webhook 和 Python 服务，并使用新项目，避免与旧任务重复。
 
 ## 从 Jellyfin 插件仓库安装（推荐）
 
@@ -20,7 +20,7 @@ Jellyfin 10.11.x 原生插件，使用 .NET 9。直接监听媒体库、播放�
 
 ![Jellyfin 10.11.6 中的 Todoist 后台](plugins/docs/dashboard.png)
 
-后台直接使用 Jellyfin 的 `emby-input`、`emby-select`、`emby-button`、列表和主题，不使用独立的后台样式。支持配置 OAuth 应用、为当前管理员授权和选择项目、手动同步、解除自身关联，以及查看所有用户的关联与错误状态；用户列表仅管理员可见，不暴露令牌。
+后台直接使用 Jellyfin 的 `emby-input`、`emby-select`、`emby-button`、列表和主题，不使用独立的后台样式。支持配置 OAuth 应用、为当前管理员授权和选择项目、重试待处理事件、解除自身关联，以及查看所有用户的关联与错误状态；用户列表仅管理员可见，不暴露令牌。
 
 ## 从源码编译和安装
 
@@ -31,17 +31,17 @@ dotnet build plugins/Jellyfin.Plugin.Todoist -c Release
 dotnet run --project plugins/Jellyfin.Plugin.Todoist.Tests -c Release
 ```
 
-停止 Jellyfin，在 **Jellyfin 的插件目录**下创建 `Todoist_1.0.0.0/`，把以下两个文件放入其中：
+停止 Jellyfin，在 **Jellyfin 的插件目录**下创建 `Todoist_1.0.3.0/`，把以下两个文件放入其中：
 
 - `plugins/Jellyfin.Plugin.Todoist/bin/Release/net9.0/Jellyfin.Plugin.Todoist.dll`
 - `plugins/Jellyfin.Plugin.Todoist/meta.json`
 
-例如官方 Docker 部署中的目标目录为 `/config/plugins/Todoist_1.0.0.0/`。原生安装使用 Jellyfin 实际的插件路径，不是本仓库的 `plugins/` 目录。只安装此插件 DLL 和清单，Jellyfin 的程序集由服务器提供。重新启动 Jellyfin，在控制台 → 插件中检查 Todoist 是否加载。
+例如官方 Docker 部署中的目标目录为 `/config/plugins/Todoist_1.0.3.0/`。原生安装使用 Jellyfin 实际的插件路径，不是本仓库的 `plugins/` 目录。只安装此插件 DLL 和清单，Jellyfin 的程序集由服务器提供。重新启动 Jellyfin，在控制台 → 插件中检查 Todoist 是否加载。
 
 ## 管理员配置 OAuth
 
 1. 在 [Todoist 应用管理页面](https://developer.todoist.com/appconsole.html)创建 OAuth 应用。
-2. 设置 Redirect URL：你的公网 Jellyfin 地址加 `/Todoist/Callback`。例如 `https://media.example.com/jellyfin/Todoist/Callback`，其中 `/jellyfin` 是可选的 Jellyfin Base URL。
+2. 设置 Redirect URL：你平时访问 Jellyfin 的地址加 `/Todoist/Callback`。例如 `https://media.example.com/jellyfin/Todoist/Callback`，其中 `/jellyfin` 是可选的 Jellyfin Base URL。
 3. 在 Jellyfin 控制台 → 插件 → Todoist 中填入 Client ID、Client secret、完全一致的 Redirect URL 并保存。
 4. 对外使用 HTTPS。HTTP 仅允许 localhost 调试。反向代理需要保留 Jellyfin Base URL，并正确转发原始协议，确保 OAuth cookie 正常返回。
 
@@ -49,15 +49,15 @@ OAuth 请求 `data:read_write` 权限，用于读取项目、创建任务和分�
 
 ## 在后台关联当前管理员的项目
 
-在 Todoist 插件后台保存 OAuth 应用配置后，点击 **授权 Todoist**。回调后自动返回 Jellyfin 原生后台，在 **我的 Todoist** 中选择项目并保存。点击 **立即同步** 排队同步，点击 **刷新状态** 查看结果；**用户关联与同步状态** 展示各用户的项目、任务数、最近成功时间和错误。
+在 Todoist 插件后台保存 OAuth 应用配置后，点击 **授权 Todoist**。回调后自动返回 Jellyfin 原生后台，在 **我的 Todoist** 中选择项目并保存。点击 **重试待处理事件** 重试失败的新入库和观看事件，点击 **刷新状态** 查看结果；**用户关联与同步状态** 展示各用户的项目、任务数、最近成功时间和错误。
 
 ## 每个用户关联 Todoist 项目
 
 1. 打开 Jellyfin 地址下的 `/Todoist/Account`，例如 `https://media.example.com/jellyfin/Todoist/Account`。管理员也可以从插件配置页点击入口。
 2. 使用自己的 Jellyfin 用户名和密码登录。此页面使用独立 Jellyfin 会话，支持普通用户，无需管理员权限。
 3. 普通用户点击 **Authorize Todoist**，在 Todoist 确认授权。回调成功后返回账户页。
-4. 选择 Todoist 项目 / 看板，点击 **Save project**。同步立即排队执行。
-5. 使用 **Refresh status** 查看最近同步时间、任务数和错误；**Sync now** 可手动请求重试。
+4. 选择 Todoist 项目 / 看板，点击 **Save project**。之后的新入库剧集才会自动创建任务。
+5. 使用 **Refresh status** 查看最近同步时间、任务数和错误；**Retry pending events** 可手动请求重试。
 
 每个 Jellyfin 用户独立授权，选择自己的项目。播放和“标记已观看”只完成对应用户的任务。接口从已验证的 Jellyfin 会话取用户 ID，不接受其他用户 ID，也不允许使用服务器全局 API key 绑定账户。
 
@@ -65,13 +65,13 @@ OAuth 请求 `data:read_write` 权限，用于读取项目、创建任务和分�
 
 ## 同步行为
 
-- 剧集按剧名分区；任务标题如 `Series S01E05`，保留特别篇的 `S00`。
-- 新增剧集触发同步；启动、项目关联和每两分钟的核对会补齐未观看剧集。
+- 剧集按剧名分区；任务标题如 `银魂 S01E01`，保留特别篇的 `S00`。从所属剧集、季读取剧名和季号；新入库时元数据未齐全则保留事件，在后续重试中创建完整标题，不用单集名代替剧名。
+- 仅 `ItemAdded` 事件将具体剧集加入待创建队列；队列保存到状态文件。启动、项目关联、每两分钟重试和手动重试不会枚举全库或补建历史任务。
 - Jellyfin 报告播放完成，或停止位置与总时长相差不超过 60 秒时，完成对应任务。手动标记“已观看”同样生效。
 - 任务映射持久化，重启、同账户重新授权及切换回之前的项目会保留去重记录。写请求使用稳定的 `X-Request-Id`；失败请求在下一轮核对重试。
 - 已完成任务的分区为空时自动归档。新增同名剧集时恢复分区。只归档插件跟踪的分区，不处理无关空分区。
 - API 列表支持分页，OAuth 应用提供短期令牌时自动刷新并保存轮换后的 refresh token。HTTP 429 / 网络错误会显示在状态页并留待后续同步，不会提前标记成功。
-- 换项目不会删除原项目任务；换 Todoist 账户会要求重新选项目。取消关联删除本地授权和映射，保留 Todoist 任务；如需撤销应用权限，在 Todoist 的集成设置中移除授权。取消关联后再次连接属于新同步，应选新项目或先清理原任务。
+- 换项目不会删除原项目任务；换 Todoist 账户会要求重新选项目。取消关联删除本地授权和映射，保留 Todoist 任务；如需撤销应用权限，在 Todoist 的集成设置中移除授权。取消关联后再次连接也不会补建历史任务；取消关联期间的入库事件不会补发。
 - 当前只创建和完成剧集任务，不同步电影、删除事件，也不会因取消“已观看”而重新打开已完成任务。
 
 ## 数据和排错
@@ -103,3 +103,19 @@ python3 plugins/test_release.py
 ```
 
 发布时必须将 ZIP 和本次生成的 `manifest.json` 一起上传，不能修改已发布 ZIP 后继续使用旧 checksum。现有用户通过 Jellyfin 的插件更新功能获取兼容的新版本。
+
+## 从 1.0.0.0 升级
+
+1.0.0.0 错误地增加了全库补齐行为。请通过 Jellyfin 插件更新功能升级到 **1.0.1.0** 并重启。新版保留授权和现有映射，不再补建历史剧集；已关联的任务仍可随播放完成或手动标记已观看而关闭。
+
+升级不会批量删除 Todoist 中已经创建的任务。旧版误建的历史任务需要在 Todoist 中清理；保留映射也可继续由观看事件关闭对应任务。
+
+## 1.0.2.0 标题修复
+
+新任务使用 `剧名 S01E01` 格式。优先读取所属剧集名称，剧集上的 `SeriesName` 作为备用；季号缺失时读取所属季。剧名、季号或集号仍缺失时延后创建，在下一轮事件重试中处理。保持仅新入库创建的行为，不补建历史任务，也不批量修改已存在的 Todoist 任务。
+
+## Jellyfin 12 授权兼容修复（1.0.3.0）
+
+后台自定义请求改用标准 `Authorization: MediaBrowser`，兼容关闭或移除旧 `X-Emby-Token` 的服务器。升级后重启 Jellyfin 并强制刷新插件配置页，确保加载新脚本。点击页面中的“授权 Todoist”，不要直接打开 `/Todoist/Authorize`：该接口需要经过认证的 POST 请求。会话过期时重新登录 Jellyfin。
+
+此修复针对后台请求认证，不代表对所有 Jellyfin 12 插件 API 的完整兼容验收。[Jellyfin 维护者的认证说明](https://gist.github.com/nielsvanvelzen/ea047d9028f676185832e51ffaf12a6f)解释了旧认证方式的移除。

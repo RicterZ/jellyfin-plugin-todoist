@@ -1,16 +1,8 @@
-Jellyfin 10.11.x 原生 Todoist 插件首次发布。
+修复 Jellyfin 12 中插件后台授权返回 HTTP 401。
 
-- 可通过 Jellyfin 插件仓库安装，无需 webhook 或 Python 服务。
-- 原生后台：OAuth 应用配置、项目关联、同步状态和用户关联列表。
-- 每个 Jellyfin 用户独立授权 Todoist，按剧集建任务，观看后自动完成。
-- 持久化去重、失败重试、令牌刷新，以及空分区归档和恢复。
+- 后台请求改为标准 Authorization: MediaBrowser 认证头，不再使用 Jellyfin 12 已移除的 X-Emby-Token。
+- 同时修复后台状态、项目列表、保存关联和解除关联的认证方式。
+- 会话失效时提示重新登录。
+- 保留仅新入库建任务及“剧名 S01E01”标题行为。
 
-插件仓库地址：
-
-```text
-https://github.com/RicterZ/jellyfin-plugin-todoist/releases/latest/download/manifest.json
-```
-
-Jellyfin 控制台 → 插件 → 仓库 → 添加上述地址；在目录中安装 Todoist 并重启。
-
-迁移前停用旧 webhook 服务。旧 Python SQLite 映射不自动迁移，建议选择新的 Todoist 项目。
+请在 Jellyfin 更新 Todoist 到 1.0.3.0 后重启，并强制刷新插件后台，再点击“授权 Todoist”。不要直接在地址栏打开 /Todoist/Authorize，它需要携带 Jellyfin 会话的 POST 请求。

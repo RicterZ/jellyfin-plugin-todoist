@@ -9,7 +9,7 @@
     </div>
     <div class="verticalSection">
         <h2 class="sectionTitle">OAuth 应用配置</h2>
-        <p>在 Todoist 开发者控制台创建应用，回调地址填写 Jellyfin 公网地址加 <code>/Todoist/Callback</code>（包含 Jellyfin Base URL）。</p>
+        <p>在 Todoist 开发者控制台创建应用，回调地址填写你访问 Jellyfin 的地址加 <code>/Todoist/Callback</code>（包含 Jellyfin Base URL）。</p>
         <form id="todoistConfigForm">
             <div class="inputContainer"><label class="inputLabel" for="todoistClientId">Client ID</label><input is="emby-input" id="todoistClientId" required></div>
             <div class="inputContainer"><label class="inputLabel" for="todoistClientSecret">Client secret</label><input is="emby-input" id="todoistClientSecret" type="password" required autocomplete="off"><div class="fieldDescription">仅服务器使用，不会发送给其他用户。</div></div>
@@ -22,9 +22,9 @@
         <p id="todoistStatus" class="fieldDescription"></p>
         <button is="emby-button" type="button" id="todoistAuthorize" class="raised"><span>授权 Todoist</span></button>
         <form id="todoistProjectForm" hidden>
-            <div class="selectContainer"><label class="selectLabel" for="todoistProject">Todoist 项目 / 看板</label><select is="emby-select" id="todoistProject" required></select><div class="fieldDescription">首次保存会同步所有可访问的未观看剧集，建议使用独立项目。切换项目会保留原项目任务。</div></div>
+            <div class="selectContainer"><label class="selectLabel" for="todoistProject">Todoist 项目 / 看板</label><select is="emby-select" id="todoistProject" required></select><div class="fieldDescription">保存后只处理新入库剧集，不补建历史剧集任务。切换项目会保留原项目任务。</div></div>
             <button is="emby-button" type="submit" class="raised button-submit block"><span>保存项目关联</span></button>
-            <button is="emby-button" type="button" id="todoistSync" class="raised"><span>立即同步</span></button>
+            <button is="emby-button" type="button" id="todoistSync" class="raised"><span>重试待处理事件</span></button>
             <button is="emby-button" type="button" id="todoistDisconnect" class="raised"><span>解除我的关联</span></button>
             <p class="fieldDescription">解除关联会清除本地授权和映射，保留 Todoist 任务。需彻底撤销授权时，在 Todoist 集成设置中移除本应用。</p>
         </form>
@@ -45,12 +45,19 @@
     const normalize = value => Array.isArray(value) ? value.map(normalize) : value && typeof value === 'object'
         ? Object.fromEntries(Object.entries(value).map(([key, item]) => [key[0].toLowerCase() + key.slice(1), normalize(item)])) : value;
     async function api(path, method = 'GET', body) {
+        const token = ApiClient.accessToken();
+        if (!token) throw new Error('Jellyfin 登录已过期，请重新登录后再授权。');
         const response = await fetch(ApiClient.getUrl('Todoist/' + path), {
-            method, headers: {'X-Emby-Token': ApiClient.accessToken(), 'Content-Type':'application/json'},
+            method, headers: {
+                'Authorization': 'MediaBrowser Client="Todoist", Device="Browser", DeviceId="todoist-dashboard", Version="1.0.3", Token="' + token + '"',
+                'Content-Type':'application/json'
+            },
             body: body === undefined ? undefined : JSON.stringify(body), cache: 'no-store'
         });
         const data = normalize(await response.json().catch(() => ({})));
-        if (!response.ok) throw new Error(data.error || '请求失败（HTTP ' + response.status + '）');
+        if (!response.ok) throw new Error(response.status === 401
+            ? 'Jellyfin 登录已过期或认证失败，请重新登录后重试。'
+            : data.error || '请求失败（HTTP ' + response.status + '）');
         return data;
     }
     const summary = row => '项目：' + (row.projectId || '未选择') + ' · 已关联剧集：' + row.trackedTasks
@@ -102,9 +109,9 @@
     });
     $('todoistAuthorize').addEventListener('click', () => run(async () => { location.assign((await api('Authorize?dashboard=true', 'POST')).url); }));
     $('todoistProjectForm').addEventListener('submit', event => {
-        event.preventDefault(); run(async () => { await api('Project', 'POST', {ProjectId:$('todoistProject').value}); await refresh(); $('todoistMessage').textContent = '项目已关联，同步已加入队列。'; });
+        event.preventDefault(); run(async () => { await api('Project', 'POST', {ProjectId:$('todoistProject').value}); await refresh(); $('todoistMessage').textContent = '项目已关联，之后新入库的剧集将自动创建任务。'; });
     });
-    $('todoistSync').addEventListener('click', () => run(async () => { await api('Sync', 'POST'); $('todoistMessage').textContent = '同步已加入队列，请稍后刷新状态。'; }));
+    $('todoistSync').addEventListener('click', () => run(async () => { await api('Sync', 'POST'); $('todoistMessage').textContent = '已请求重试待处理事件，不会补建历史剧集任务。'; }));
     $('todoistDisconnect').addEventListener('click', () => run(async () => { await api('Authorization', 'DELETE'); await refresh(); $('todoistMessage').textContent = '已解除我的关联。'; }));
     $('todoistRefresh').addEventListener('click', () => run(refresh));
 })();
