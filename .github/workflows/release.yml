@@ -19,6 +19,8 @@ jobs:
           python-version: '3.13'
       - name: Verify plugin
         run: dotnet run --project plugins/Jellyfin.Plugin.Todoist.Tests -c Release
+      - name: Verify dashboard authentication
+        run: node plugins/test_dashboard_auth.cjs
       - name: Package repository
         run: |
           python plugins/build_release.py --skip-build

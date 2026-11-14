@@ -4,7 +4,7 @@
   "name": "Todoist",
   "description": "Synchronize Jellyfin episodes with each user's Todoist project.",
   "owner": "RicterZ",
-  "version": "1.0.2.0",
+  "version": "1.0.3.0",
   "targetAbi": "10.11.0.0",
   "status": "Active",
   "autoUpdate": false

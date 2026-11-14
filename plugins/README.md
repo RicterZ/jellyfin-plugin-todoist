@@ -31,12 +31,12 @@ dotnet build plugins/Jellyfin.Plugin.Todoist -c Release
 dotnet run --project plugins/Jellyfin.Plugin.Todoist.Tests -c Release
 ```
 
-停止 Jellyfin，在 **Jellyfin 的插件目录**下创建 `Todoist_1.0.2.0/`，把以下两个文件放入其中：
+停止 Jellyfin，在 **Jellyfin 的插件目录**下创建 `Todoist_1.0.3.0/`，把以下两个文件放入其中：
 
 - `plugins/Jellyfin.Plugin.Todoist/bin/Release/net9.0/Jellyfin.Plugin.Todoist.dll`
 - `plugins/Jellyfin.Plugin.Todoist/meta.json`
 
-例如官方 Docker 部署中的目标目录为 `/config/plugins/Todoist_1.0.2.0/`。原生安装使用 Jellyfin 实际的插件路径，不是本仓库的 `plugins/` 目录。只安装此插件 DLL 和清单，Jellyfin 的程序集由服务器提供。重新启动 Jellyfin，在控制台 → 插件中检查 Todoist 是否加载。
+例如官方 Docker 部署中的目标目录为 `/config/plugins/Todoist_1.0.3.0/`。原生安装使用 Jellyfin 实际的插件路径，不是本仓库的 `plugins/` 目录。只安装此插件 DLL 和清单，Jellyfin 的程序集由服务器提供。重新启动 Jellyfin，在控制台 → 插件中检查 Todoist 是否加载。
 
 ## 管理员配置 OAuth
 
@@ -113,3 +113,9 @@ python3 plugins/test_release.py
 ## 1.0.2.0 标题修复
 
 新任务使用 `剧名 S01E01` 格式。优先读取所属剧集名称，剧集上的 `SeriesName` 作为备用；季号缺失时读取所属季。剧名、季号或集号仍缺失时延后创建，在下一轮事件重试中处理。保持仅新入库创建的行为，不补建历史任务，也不批量修改已存在的 Todoist 任务。
+
+## Jellyfin 12 授权兼容修复（1.0.3.0）
+
+后台自定义请求改用标准 `Authorization: MediaBrowser`，兼容关闭或移除旧 `X-Emby-Token` 的服务器。升级后重启 Jellyfin 并强制刷新插件配置页，确保加载新脚本。点击页面中的“授权 Todoist”，不要直接打开 `/Todoist/Authorize`：该接口需要经过认证的 POST 请求。会话过期时重新登录 Jellyfin。
+
+此修复针对后台请求认证，不代表对所有 Jellyfin 12 插件 API 的完整兼容验收。[Jellyfin 维护者的认证说明](https://gist.github.com/nielsvanvelzen/ea047d9028f676185832e51ffaf12a6f)解释了旧认证方式的移除。
