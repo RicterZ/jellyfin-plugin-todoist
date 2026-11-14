@@ -18,6 +18,16 @@ public sealed class Binding
     public DateTimeOffset? ExpiresAt { get; set; }
     public string ProjectId { get; set; } = "";
     public Dictionary<string, Dictionary<Guid, TaskMapping>> ProjectTasks { get; set; } = new();
+    public Dictionary<string, HashSet<Guid>> PendingAdditions { get; set; } = new();
+    [JsonIgnore]
+    public HashSet<Guid> PendingItems
+    {
+        get
+        {
+            if (!PendingAdditions.TryGetValue(ProjectId, out var items)) PendingAdditions[ProjectId] = items = new();
+            return items;
+        }
+    }
     [JsonIgnore]
     public Dictionary<Guid, TaskMapping> Tasks
     {

@@ -1,16 +1,8 @@
-Jellyfin 10.11.x 原生 Todoist 插件首次发布。
+修复新入库任务缺少剧名的标题问题。
 
-- 可通过 Jellyfin 插件仓库安装，无需 webhook 或 Python 服务。
-- 原生后台：OAuth 应用配置、项目关联、同步状态和用户关联列表。
-- 每个 Jellyfin 用户独立授权 Todoist，按剧集建任务，观看后自动完成。
-- 持久化去重、失败重试、令牌刷新，以及空分区归档和恢复。
+- 新任务标题为 `银魂 S01E01` 这样的“剧名 + 季号 + 集号”格式。
+- 从所属剧集读取正式名称，剧集 SeriesName 作为备用；缺少季号时从所属季读取。
+- 新入库元数据未齐全时等待后续重试，不创建仅含单集名的错误标题。
+- 保持 1.0.1.0 的行为：只处理新入库，不补建历史剧集任务，播放完成或手动标记已观看关闭已有对应任务。
 
-插件仓库地址：
-
-```text
-https://github.com/RicterZ/jellyfin-plugin-todoist/releases/latest/download/manifest.json
-```
-
-Jellyfin 控制台 → 插件 → 仓库 → 添加上述地址；在目录中安装 Todoist 并重启。
-
-迁移前停用旧 webhook 服务。旧 Python SQLite 映射不自动迁移，建议选择新的 Todoist 项目。
+请在 Jellyfin 更新 Todoist 到 1.0.2.0 并重启，仓库地址不变。此版本修复新建任务，不批量修改已经存在的 Todoist 任务。
