@@ -45,12 +45,19 @@
     const normalize = value => Array.isArray(value) ? value.map(normalize) : value && typeof value === 'object'
         ? Object.fromEntries(Object.entries(value).map(([key, item]) => [key[0].toLowerCase() + key.slice(1), normalize(item)])) : value;
     async function api(path, method = 'GET', body) {
+        const token = ApiClient.accessToken();
+        if (!token) throw new Error('Jellyfin 登录已过期，请重新登录后再授权。');
         const response = await fetch(ApiClient.getUrl('Todoist/' + path), {
-            method, headers: {'X-Emby-Token': ApiClient.accessToken(), 'Content-Type':'application/json'},
+            method, headers: {
+                'Authorization': 'MediaBrowser Client="Todoist", Device="Browser", DeviceId="todoist-dashboard", Version="1.0.3", Token="' + token + '"',
+                'Content-Type':'application/json'
+            },
             body: body === undefined ? undefined : JSON.stringify(body), cache: 'no-store'
         });
         const data = normalize(await response.json().catch(() => ({})));
-        if (!response.ok) throw new Error(data.error || '请求失败（HTTP ' + response.status + '）');
+        if (!response.ok) throw new Error(response.status === 401
+            ? 'Jellyfin 登录已过期或认证失败，请重新登录后重试。'
+            : data.error || '请求失败（HTTP ' + response.status + '）');
         return data;
     }
     const summary = row => '项目：' + (row.projectId || '未选择') + ' · 已关联剧集：' + row.trackedTasks
