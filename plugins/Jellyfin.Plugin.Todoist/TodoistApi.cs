@@ -63,7 +63,8 @@ public sealed class TodoistApi(IHttpClientFactory clients)
         var uuid = Guid.NewGuid().ToString();
         var response = await SendAsync(token, HttpMethod.Post, "sync", new
         {
-            sync_token = "*", resource_types = new[] { "sections" },
+            sync_token = "*",
+            resource_types = new[] { "sections" },
             commands = new[] { new { type = archive ? "section_archive" : "section_unarchive", uuid, args = new { id } } }
         }, ct);
         var status = response.GetProperty("sync_status").GetProperty(uuid);

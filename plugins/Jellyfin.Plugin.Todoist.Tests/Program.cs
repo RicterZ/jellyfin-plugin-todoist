@@ -10,6 +10,7 @@ using MediaBrowser.Controller.Entities.TV;
 using MediaBrowser.Controller.Library;
 using MediaBrowser.Controller.Session;
 using MediaBrowser.Model.Serialization;
+using MediaBrowser.Model.Entities;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -54,21 +55,32 @@ try
     var episode = new Episode { Id = Guid.NewGuid(), Name = "Pilot", SeriesName = "Series", ParentIndexNumber = 1, IndexNumber = 1 };
     var played = new HashSet<Guid>();
     var queries = new List<Guid>();
+    var libraryItems = new Dictionary<Guid, Episode> { [episode.Id] = episode };
+    EventHandler<ItemChangeEventArgs>? itemAdded = null;
+    EventHandler<UserDataSaveEventArgs>? userDataSaved = null;
     var library = Stub<ILibraryManager>.Create((method, args) =>
     {
+        if (method.Name == "add_ItemAdded") itemAdded += (EventHandler<ItemChangeEventArgs>)args![0]!;
+        if (method.Name == "remove_ItemAdded") itemAdded -= (EventHandler<ItemChangeEventArgs>)args![0]!;
         if (method.Name == "GetItemList")
         {
             var query = (InternalItemsQuery)args![0]!;
             Check(query.User != null && query.Recursive, "Every query must be user scoped");
+            Check(query.ItemIds.Length > 0, "Never query the entire library");
             queries.Add(query.User!.Id);
-            return new BaseItem[] { episode };
+            return query.ItemIds.Where(libraryItems.ContainsKey).Select(id => (BaseItem)libraryItems[id]).ToArray();
         }
         return null;
     });
     var users = Stub<IUserManager>.Create((method, args) => method.Name == "GetUserById"
         ? ((Guid)args![0]! == first.Id ? first : second) : null);
-    var userData = Stub<IUserDataManager>.Create((method, args) => method.Name == "GetUserData"
-        ? new UserItemData { Key = "episode", Played = played.Contains(((User)args![0]!).Id) } : null);
+    var userData = Stub<IUserDataManager>.Create((method, args) =>
+    {
+        if (method.Name == "add_UserDataSaved") userDataSaved += (EventHandler<UserDataSaveEventArgs>)args![0]!;
+        if (method.Name == "remove_UserDataSaved") userDataSaved -= (EventHandler<UserDataSaveEventArgs>)args![0]!;
+        return method.Name == "GetUserData"
+            ? new UserItemData { Key = "episode", Played = played.Contains(((User)args![0]!).Id) } : null;
+    });
     EventHandler<PlaybackStopEventArgs>? playbackStopped = null;
     var sessions = Stub<ISessionManager>.Create((method, args) =>
     {
@@ -87,23 +99,69 @@ try
         Check(File.GetUnixFileMode(plugin.StatePath) == (UnixFileMode.UserRead | UnixFileMode.UserWrite), "Private credential file");
 
     TodoistService NewService() => new(library, users, userData, sessions, api, NullLogger<TodoistService>.Instance);
-    async Task Cycle()
+    async Task FlushEvents(TodoistService service, Action action)
+    {
+        // The second user's attempt changes either LastSync or LastError on every processed cycle.
+        string Progress(object status)
+        {
+            var value = JsonSerializer.SerializeToElement(status);
+            return value.GetProperty("LastSync").ToString() + value.GetProperty("LastError").ToString();
+        }
+        var before = Progress(await service.StatusAsync(second.Id, ct));
+        action();
+        service.RequestSync();
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        while (Progress(await service.StatusAsync(second.Id, timeout.Token)) == before)
+            await Task.Delay(10, timeout.Token);
+    }
+    async Task Cycle(Action? action = null)
     {
         using var service = NewService();
         await service.StartAsync(ct);
-        try { await service.StatusAsync(first.Id, ct); }
+        try
+        {
+            await service.StatusAsync(first.Id, ct);
+            if (action != null) await FlushEvents(service, action);
+        }
         finally { await service.StopAsync(ct); }
     }
 
     await Cycle();
-    Check(handler.Creates == 2, "One task per Jellyfin user");
+    Check(handler.Creates == 0 && queries.Count == 0, "Startup must not backfill historical episodes");
+    using (var service = NewService())
+    {
+        await service.StartAsync(ct);
+        try
+        {
+            await service.SetProjectAsync(second.Id, "project-b", ct);
+            await FlushEvents(service, () => service.RequestSync());
+            Check(handler.Creates == 0 && queries.Count == 0, "Linking and manual retry on a running service must not scan or import history");
+        }
+        finally { await service.StopAsync(ct); }
+    }
+    await Cycle(() => userDataSaved!(null, new UserDataSaveEventArgs
+    {
+        UserId = first.Id, Item = episode, SaveReason = UserDataSaveReason.TogglePlayed,
+        UserData = new UserItemData { Key = "episode", Played = true }
+    }));
+    Check(handler.Creates == 0, "Marking an untracked historical item watched must not create a task");
+    await Cycle(() => itemAdded!(null, new ItemChangeEventArgs { Item = episode }));
+    Check(handler.Creates == 2, "Create only after ItemAdded, once per Jellyfin user");
     Check(handler.RequestIds.Distinct().Count() == 2, "Task IDs isolated by user/project");
     Check(queries.Contains(first.Id) && queries.Contains(second.Id), "Sync both users");
-    await Cycle();
-    Check(handler.Creates == 2, "No duplicates after restart");
+    var historical = new Episode { Id = Guid.NewGuid(), Name = "Historical", SeriesName = "Series" };
+    libraryItems[historical.Id] = historical;
+    await Cycle(() => itemAdded!(null, new ItemChangeEventArgs { Item = episode }));
+    Check(handler.Creates == 2, "No duplicates after restart or duplicate ItemAdded");
+    Check(!StateFile.Load(plugin.StatePath).Users[second.Id].Tasks.ContainsKey(historical.Id), "Unwatched historical items must not be backfilled");
     played.Add(first.Id);
     handler.FailClose = true;
-    await Cycle();
+    await Cycle(() => userDataSaved!(null, new UserDataSaveEventArgs
+    {
+        UserId = first.Id, Item = episode, SaveReason = UserDataSaveReason.TogglePlayed,
+        UserData = new UserItemData { Key = "episode", Played = true }
+    }));
+    Check(StateFile.Load(plugin.StatePath).Users[first.Id].Tasks[episode.Id].CompletionRequested, "Manual watched event persists completion intent");
     Check(!StateFile.Load(plugin.StatePath).Users[first.Id].Tasks[episode.Id].Completed, "Failed close must not mark completed");
     handler.FailClose = false;
     await Cycle();
@@ -137,9 +195,19 @@ try
 
     var previousEpisode = episode;
     episode = new Episode { Id = Guid.NewGuid(), Name = "Second", SeriesName = "Series", ParentIndexNumber = 1, IndexNumber = 2 };
-    await Cycle();
+    libraryItems[episode.Id] = episode;
+    await Cycle(() => itemAdded!(null, new ItemChangeEventArgs { Item = episode }));
     Check(handler.Unarchives == 1, "Restore archived section when an unwatched episode arrives");
     Check(StateFile.Load(plugin.StatePath).Users[second.Id].Tasks.ContainsKey(episode.Id), "Create task in restored section");
+    var failedEpisode = new Episode { Id = Guid.NewGuid(), Name = "Retry", SeriesName = "Series", IndexNumber = 3 };
+    libraryItems[failedEpisode.Id] = failedEpisode;
+    handler.FailCreate = true;
+    await Cycle(() => itemAdded!(null, new ItemChangeEventArgs { Item = failedEpisode }));
+    Check(StateFile.Load(plugin.StatePath).Users[second.Id].PendingItems.Contains(failedEpisode.Id), "Persist failed ItemAdded for retry");
+    handler.FailCreate = false;
+    await Cycle();
+    Check(StateFile.Load(plugin.StatePath).Users[second.Id].Tasks.ContainsKey(failedEpisode.Id), "Retry queued additions after restart without scanning history");
+    Check(!StateFile.Load(plugin.StatePath).Users[first.Id].Tasks.ContainsKey(episode.Id), "New ItemAdded already watched by a user must not create that user's task");
     episode = previousEpisode;
 
     var expiring = StateFile.Load(plugin.StatePath);
@@ -160,9 +228,11 @@ try
     {
         var status = JsonSerializer.Serialize(await service.StatusAsync(first.Id, ct));
         Check(!status.Contains("first-token") && !status.Contains("secret"), "Status must not expose secrets");
+        var createsBeforeLink = handler.Creates;
         await service.SetProjectAsync(second.Id, "project-a", ct);
         await service.SetProjectAsync(second.Id, "project-b", ct);
         Check(StateFile.Load(plugin.StatePath).Users[second.Id].Tasks.ContainsKey(episode.Id), "Project switching preserves mappings");
+        Check(handler.Creates == createsBeforeLink, "Linking or switching projects must not backfill history");
         await Throws<InvalidOperationException>(() => service.SetProjectAsync(first.Id, "foreign-project", ct), "Reject inaccessible projects");
 
         var url = await service.AuthorizeAsync(first.Id, "browser-proof", ct);
@@ -215,7 +285,7 @@ public class Stub<T> : DispatchProxy where T : class
 public sealed class FakeHandler : HttpMessageHandler, IHttpClientFactory
 {
     public int Creates, Archives, Unarchives, TokenCalls;
-    public bool FailClose, FailCommand, Paginate, CursorSeen;
+    public bool FailClose, FailCreate, FailCommand, Paginate, CursorSeen;
     public List<string> RequestIds { get; } = new();
     private readonly HashSet<string> _closed = new();
     private readonly HashSet<string> _archived = new();
@@ -256,6 +326,7 @@ public sealed class FakeHandler : HttpMessageHandler, IHttpClientFactory
         }
         else if (path.EndsWith("/tasks") && request.Method == HttpMethod.Post)
         {
+            if (FailCreate) return new HttpResponseMessage(HttpStatusCode.ServiceUnavailable);
             Creates++; RequestIds.Add(request.Headers.GetValues("X-Request-Id").Single());
             _closed.Remove(token);
             payload = new { id = "task-" + token + Creates };

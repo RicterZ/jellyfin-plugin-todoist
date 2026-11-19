@@ -31,7 +31,7 @@ def package(project: Path, output: Path, repository: str) -> tuple[Path, Path]:
         "description": "独立 OAuth 授权、项目关联、观看后自动完成任务，以及 Jellyfin 原生后台。",
         "versions": [{
             "version": version, "targetAbi": metadata["targetAbi"],
-            "changelog": "Jellyfin 原生后台、用户 OAuth 授权及剧集同步。",
+            "changelog": (project.parent / "RELEASE_NOTES.md").read_text(encoding="utf-8"),
             "sourceUrl": f"https://github.com/{repository}/releases/download/v{version}/{archive.name}",
             # Jellyfin's installer requires MD5 for this field.
             "checksum": hashlib.md5(archive.read_bytes(), usedforsecurity=False).hexdigest(),

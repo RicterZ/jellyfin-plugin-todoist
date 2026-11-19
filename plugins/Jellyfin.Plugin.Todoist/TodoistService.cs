@@ -23,6 +23,8 @@ public sealed class TodoistService : BackgroundService
     private readonly SemaphoreSlim _gate = new(1, 1);
     private readonly SemaphoreSlim _signal = new(0, 1);
     private readonly ConcurrentQueue<(Guid UserId, Guid ItemId)> _completions = new();
+    private readonly ConcurrentQueue<(Guid UserId, string ProjectId, string AccountId, Guid ItemId)> _additions = new();
+    private (Guid UserId, string ProjectId, string AccountId)[] _additionTargets = Array.Empty<(Guid, string, string)>();
     private readonly Dictionary<string, PendingAuthorization> _pending = new();
     private readonly State _state;
     private record PendingAuthorization(Guid UserId, DateTimeOffset Expires, string BrowserProof);
@@ -38,9 +40,13 @@ public sealed class TodoistService : BackgroundService
         _logger = logger;
         // A corrupt state must stop startup rather than silently creating duplicate tasks.
         _state = StateFile.Load(Plugin.Instance.StatePath);
+        UpdateAdditionTargets();
     }
 
     private void Save() => StateFile.Save(Plugin.Instance.StatePath, _state);
+    private void UpdateAdditionTargets() => Volatile.Write(ref _additionTargets, _state.Users
+        .Where(pair => !string.IsNullOrEmpty(pair.Value.ProjectId))
+        .Select(pair => (pair.Key, pair.Value.ProjectId, pair.Value.TodoistUserId)).ToArray());
     public void RequestSync() { if (_signal.CurrentCount == 0) { try { _signal.Release(); } catch (SemaphoreFullException) { } } }
 
     private async Task<T> Locked<T>(Func<Task<T>> action, CancellationToken ct)
@@ -105,6 +111,7 @@ public sealed class TodoistService : BackgroundService
             ? existing : new Binding { TodoistUserId = accountId };
         UpdateToken(binding, token);
         _state.Users[pending.UserId] = binding;
+        UpdateAdditionTargets();
         Save();
         return true;
     }, ct);
@@ -162,6 +169,7 @@ public sealed class TodoistService : BackgroundService
             binding.ProjectId = projectId;
         }
         binding.LastError = null;
+        UpdateAdditionTargets();
         Save();
         RequestSync();
         return true;
@@ -170,6 +178,7 @@ public sealed class TodoistService : BackgroundService
     public Task<bool> DisconnectAsync(Guid user, CancellationToken ct) => Locked(() =>
     {
         _state.Users.Remove(user);
+        UpdateAdditionTargets();
         foreach (var key in _pending.Where(p => p.Value.UserId == user).Select(p => p.Key).ToArray()) _pending.Remove(key);
         Save();
         return Task.FromResult(true);
@@ -191,7 +200,14 @@ public sealed class TodoistService : BackgroundService
         await base.StopAsync(ct);
     }
 
-    private void OnItemAdded(object? sender, ItemChangeEventArgs e) { if (e.Item is Episode) RequestSync(); }
+    private void OnItemAdded(object? sender, ItemChangeEventArgs e)
+    {
+        if (e.Item is not Episode) return;
+        // Capture subscribers at event time: linking a project must never backfill old items.
+        foreach (var target in Volatile.Read(ref _additionTargets))
+            _additions.Enqueue((target.UserId, target.ProjectId, target.AccountId, e.Item.Id));
+        RequestSync();
+    }
     private void OnUserDataSaved(object? sender, UserDataSaveEventArgs e)
     {
         if (e.Item is Episode && e.UserData.Played && e.SaveReason != UserDataSaveReason.PlaybackProgress)
@@ -216,11 +232,20 @@ public sealed class TodoistService : BackgroundService
             {
                 await Locked(async () =>
                 {
+                    while (_additions.TryDequeue(out var addition))
+                    {
+                        if (!_state.Users.TryGetValue(addition.UserId, out var binding)
+                            || binding.TodoistUserId != addition.AccountId) continue;
+                        if (!binding.PendingAdditions.TryGetValue(addition.ProjectId, out var items))
+                            binding.PendingAdditions[addition.ProjectId] = items = new();
+                        items.Add(addition.ItemId);
+                    }
                     while (_completions.TryDequeue(out var completion))
                     {
-                        if (_state.Users.TryGetValue(completion.UserId, out var binding)
-                            && binding.Tasks.TryGetValue(completion.ItemId, out var mapping))
-                            mapping.CompletionRequested = true;
+                        if (!_state.Users.TryGetValue(completion.UserId, out var binding)) continue;
+                        foreach (var items in binding.PendingAdditions.Values) items.Remove(completion.ItemId);
+                        foreach (var tasks in binding.ProjectTasks.Values)
+                            if (tasks.TryGetValue(completion.ItemId, out var mapping)) mapping.CompletionRequested = true;
                     }
                     Save();
                     foreach (var (user, binding) in _state.Users)
@@ -251,13 +276,16 @@ public sealed class TodoistService : BackgroundService
     {
         var user = _users.GetUserById(userId);
         if (user == null) return;
+        var itemIds = binding.Tasks.Keys.Concat(binding.PendingItems).Distinct().ToArray();
+        if (itemIds.Length == 0) return;
         await RefreshAsync(binding, ct);
         var token = binding.AccessToken;
         var sections = await _api.SectionsAsync(token, binding.ProjectId, ct);
         var touchedSections = new HashSet<string>();
-        // User-scoped queries preserve library access and parental restrictions.
+        // Look up only event-queued items and existing mappings, never the entire library.
         var episodes = _library.GetItemList(new InternalItemsQuery(user)
         {
+            ItemIds = itemIds,
             Recursive = true,
             IncludeItemTypes = new[] { BaseItemKind.Episode }
         });
@@ -267,7 +295,13 @@ public sealed class TodoistService : BackgroundService
             var played = _userData.GetUserData(user, episode)?.Played == true;
             if (!binding.Tasks.TryGetValue(episode.Id, out var mapping))
             {
-                if (played) continue;
+                if (!binding.PendingItems.Contains(episode.Id)) continue;
+                if (played)
+                {
+                    binding.PendingItems.Remove(episode.Id);
+                    Save();
+                    continue;
+                }
                 var series = string.IsNullOrWhiteSpace(episode.SeriesName) ? episode.Name : episode.SeriesName;
                 var section = sections.FirstOrDefault(s => s.GetProperty("name").GetString() == series);
                 if (section.ValueKind == JsonValueKind.Undefined)
@@ -293,8 +327,10 @@ public sealed class TodoistService : BackgroundService
                 }, ct, EpisodeRules.RequestId($"task:{userId}:{binding.ProjectId}:{episode.Id}"));
                 mapping = new TaskMapping { TaskId = TodoistApi.Id(task), SectionId = TodoistApi.Id(section) };
                 binding.Tasks[episode.Id] = mapping;
+                binding.PendingItems.Remove(episode.Id);
                 Save();
             }
+            else if (binding.PendingItems.Remove(episode.Id)) Save();
             touchedSections.Add(mapping.SectionId);
             if (!mapping.Completed && (played || mapping.CompletionRequested))
             {
