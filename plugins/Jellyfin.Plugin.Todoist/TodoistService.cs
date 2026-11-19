@@ -302,7 +302,13 @@ public sealed class TodoistService : BackgroundService
                     Save();
                     continue;
                 }
-                var series = string.IsNullOrWhiteSpace(episode.SeriesName) ? episode.Name : episode.SeriesName;
+                var seasonItem = _library.GetItemById(episode.SeasonId != Guid.Empty ? episode.SeasonId : episode.ParentId) as Season;
+                var seriesItem = _library.GetItemById(episode.SeriesId != Guid.Empty ? episode.SeriesId : seasonItem?.ParentId ?? episode.ParentId) as Series;
+                var series = string.IsNullOrWhiteSpace(seriesItem?.Name) ? episode.SeriesName : seriesItem.Name;
+                var seasonNumber = episode.ParentIndexNumber ?? seasonItem?.IndexNumber;
+                // ItemAdded can precede metadata refresh: keep queued until a real title is available.
+                if (string.IsNullOrWhiteSpace(series) || !seasonNumber.HasValue || !episode.IndexNumber.HasValue) continue;
+                series = series.Trim();
                 var section = sections.FirstOrDefault(s => s.GetProperty("name").GetString() == series);
                 if (section.ValueKind == JsonValueKind.Undefined)
                 {
@@ -322,7 +328,7 @@ public sealed class TodoistService : BackgroundService
                 {
                     project_id = binding.ProjectId,
                     section_id = TodoistApi.Id(section),
-                    content = EpisodeRules.Title(series, episode.Name, episode.ParentIndexNumber, episode.IndexNumber),
+                    content = EpisodeRules.Title(series, episode.Name, seasonNumber, episode.IndexNumber),
                     due_string = "today"
                 }, ct, EpisodeRules.RequestId($"task:{userId}:{binding.ProjectId}:{episode.Id}"));
                 mapping = new TaskMapping { TaskId = TodoistApi.Id(task), SectionId = TodoistApi.Id(section) };
